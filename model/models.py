@@ -15,8 +15,6 @@ class CMuST(nn.Module):
     where data has inherent spatial and temporal attributes,
     multi-dimensional time series forecasting.
     
-    part ref https://github.com/zezhishao/STID/blob/master/stid/stid_arch/stid_arch.py
-           & https://github.com/joshsohn/STAEformer-final-project/blob/main/model/Spacetimeformer.py
     """
     def __init__(self, num_nodes, input_len=12, output_len=12, tod_size=48,
         obser_dim=3, output_dim=1, obser_embed_dim=24, tod_embed_dim=24, dow_embed_dim=24, timestamp_embed_dim=12,

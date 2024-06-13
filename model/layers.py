@@ -69,7 +69,6 @@ class AttentionLayer(nn.Module):
     """
     implementation of a multi-head attention layer for neural networks.
     
-    part ref https://github.com/XDZhelheim/STAEformer/blob/main/model/STAEformer.py#L6
     """
 
     def __init__(self, q_dim, k_dim, v_dim, atten_dim, num_heads=8, mask=False):
