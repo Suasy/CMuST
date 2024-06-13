@@ -54,11 +54,14 @@ def vrange(starts, stops):
     indices = np.repeat(stops - l.cumsum(), l) + np.arange(l.sum())
     return indices.reshape(-1, l[0])
 
-def get_dataloaders(
-    data_dir, batch_size=64, logger=None
-):
-    data = np.load(os.path.join(data_dir, "data.npz"))["data"].astype(np.float32)
 
+def get_dataloaders(data_dir, batch_size=64, logger=None):
+    
+    '''
+    part ref https://github.com/XDZhelheim/STAEformer/blob/main/lib/data_prepare.py#L9
+    '''
+    
+    data = np.load(os.path.join(data_dir, "data.npz"))["data"].astype(np.float32)
     index = np.load(os.path.join(data_dir, "index.npz"))
 
     train_index = index["train"]  # (num_samples, 3)

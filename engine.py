@@ -1,16 +1,5 @@
-import argparse
 import numpy as np
-import pandas as pd
-import os
 import torch
-import torch.nn as nn
-import datetime
-import time
-import matplotlib.pyplot as plt
-from torchinfo import summary
-import yaml
-import json
-import sys
 import copy
 
 from utils.utils import *
@@ -20,106 +9,60 @@ from utils.logging import get_logger
 from utils.args import create_parser
 from model.models import CMuST
 
-@torch.no_grad()
-def eval_model(model, device, valset_loader, scaler, criterion):
-    
-    model = model.to(device)
-    model.eval()
-    batch_loss_list = []
-    for x_batch, y_batch in valset_loader:
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
+def train_epoch(model, device, dataloader, scaler, optimizer, scheduler, criterion):
 
-        out_batch = model(x_batch)
-        out_batch = scaler.inverse_transform(out_batch)
-        loss = criterion(out_batch, y_batch)
-        batch_loss_list.append(loss.item())
-
-    return np.mean(batch_loss_list)
-
-
-@torch.no_grad()
-def predict(model, device, loader, scaler):
-    
-    model = model.to(device)
-    model.eval()
-    y = []
-    out = []
-
-    for x_batch, y_batch in loader:
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
-
-        out_batch = model(x_batch)
-        out_batch = scaler.inverse_transform(out_batch)
-
-        out_batch = out_batch.cpu().numpy()
-        y_batch = y_batch.cpu().numpy()
-        out.append(out_batch)
-        y.append(y_batch)
-
-    out = np.vstack(out).squeeze()  # (samples, out_steps, num_nodes)
-    y = np.vstack(y).squeeze()
-
-    return y, out
-
-
-def train_one_epoch(model, device, trainset_loader, scaler, optimizer, scheduler, criterion, clip_grad):
-    
     model.train()
-    batch_loss_list = []
-    for x_batch, y_batch in trainset_loader:
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
-        out_batch = model(x_batch)
-        out_batch = scaler.inverse_transform(out_batch)
+    losses = []
+    
+    for inputs, targets in dataloader:
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+        predictions = model(inputs)
+        predictions = scaler.inverse_transform(predictions)
 
-        loss = criterion(out_batch, y_batch)
-        batch_loss_list.append(loss.item())
+        loss = criterion(predictions, targets)
+        losses.append(loss.item())
 
         optimizer.zero_grad()
         loss.backward()
-        if clip_grad:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
         optimizer.step()
 
-    epoch_loss = np.mean(batch_loss_list)
+    avg_loss = np.mean(losses)
     scheduler.step()
 
-    return epoch_loss
+    return avg_loss
 
-def train(model, device, trainset_loader, valset_loader, scaler, optimizer, scheduler, criterion, clip_grad, 
-          max_epochs, patience, verbose=1, plot=False, logger=None, save_path=None):
+
+def train(model, device, trainset_loader, valset_loader, scaler, optimizer, scheduler, criterion, 
+          max_epochs, patience, log_interval=1, logger=None, save_path=None):
     
     model = model.to(device)
     
-    wait = 0
+    patience_counter = 0
     min_val_loss = np.inf
 
-    train_loss_list = []
-    val_loss_list = []
+    train_losses = []
+    val_losses = []
 
     for epoch in range(max_epochs):
-        train_loss = train_one_epoch(
-            model, device, trainset_loader, scaler, optimizer, scheduler, criterion, clip_grad
-        )
-        train_loss_list.append(train_loss)
+        train_loss = train_epoch(model, device, trainset_loader, scaler, optimizer, scheduler, criterion)
+        train_losses.append(train_loss)
 
-        val_loss = eval_model(model, device, valset_loader, scaler, criterion)
-        val_loss_list.append(val_loss)
+        val_loss = evaluate(model, device, valset_loader, scaler, criterion)
+        val_losses.append(val_loss)
 
-        if (epoch + 1) % verbose == 0:
+        if (epoch + 1) % log_interval == 0:
             message = "Epoch: {}\tTrain Loss: {:.4f} Val Loss: {:.4f} LR: {:.4e}"
             logger.info(message.format(epoch + 1, train_loss, val_loss, scheduler.get_last_lr()[0]))
 
         if val_loss < min_val_loss:
-            wait = 0
+            patience_counter = 0
             min_val_loss = val_loss
             best_epoch = epoch
             best_state_dict = copy.deepcopy(model.state_dict())
         else:
-            wait += 1
-            if wait >= patience:
+            patience_counter += 1
+            if patience_counter >= patience:
                 break
 
     model.load_state_dict(best_state_dict)
@@ -128,59 +71,49 @@ def train(model, device, trainset_loader, valset_loader, scaler, optimizer, sche
 
     logger.info(f"Early stopping at epoch: {epoch+1} Best at epoch {best_epoch+1}")
     train_log = "Train Loss: {:.5f} MAE: {:.5f} RMSE: {:.5f} MAPE: {:.5f}"
-    logger.info(train_log.format(train_loss_list[best_epoch], train_mae, train_rmse, train_mape))
+    logger.info(train_log.format(train_losses[best_epoch], train_mae, train_rmse, train_mape))
     
     val_log = "Val Loss: {:.5f} MAE: {:.5f} RMSE: {:.5f} MAPE: {:.5f}"
-    logger.info(val_log.format(val_loss_list[best_epoch], val_mae, val_rmse, val_mape))
-
-    if plot:
-        plt.plot(range(0, epoch + 1), train_loss_list, "-", label="Train Loss")
-        plt.plot(range(0, epoch + 1), val_loss_list, "-", label="Val Loss")
-        plt.title("Epoch-Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.show()
+    logger.info(val_log.format(val_losses[best_epoch], val_mae, val_rmse, val_mape))
 
     torch.save(best_state_dict, save_path)
     return model
 
-def train_record_w(model, device, trainset_loader, valset_loader, scaler, optimizer, scheduler, criterion, clip_grad, 
-          max_epochs, patience, verbose=1, plot=False, logger=None, save_path=None):
+
+def train_record_w(model, device, trainset_loader, valset_loader, scaler, optimizer, scheduler, criterion, 
+          max_epochs, patience, log_interval=1, logger=None, save_path=None):
     
     model = model.to(device)
     
-    wait = 0
+    patience_counter = 0
     min_val_loss = np.inf
 
-    train_loss_list = []
-    val_loss_list = []
+    train_losses = []
+    val_losses = []
     w_list = []
 
     for epoch in range(max_epochs):
-        train_loss = train_one_epoch(
-            model, device, trainset_loader, scaler, optimizer, scheduler, criterion, clip_grad
-        )
-        train_loss_list.append(train_loss)
+        train_loss = train_epoch(model, device, trainset_loader, scaler, optimizer, scheduler, criterion)
+        train_losses.append(train_loss)
         
         parameters_copy = {name: param.clone() for name, param in model.named_parameters()}
         w_list.append(parameters_copy)
 
-        val_loss = eval_model(model, device, valset_loader, scaler, criterion)
-        val_loss_list.append(val_loss)
+        val_loss = evaluate(model, device, valset_loader, scaler, criterion)
+        val_losses.append(val_loss)
 
-        if (epoch + 1) % verbose == 0:
+        if (epoch + 1) % log_interval == 0:
             message = "Epoch: {}\tTrain Loss: {:.4f} Val Loss: {:.4f} LR: {:.4e}"
             logger.info(message.format(epoch + 1, train_loss, val_loss, scheduler.get_last_lr()[0]))
 
         if val_loss < min_val_loss:
-            wait = 0
+            patience_counter = 0
             min_val_loss = val_loss
             best_epoch = epoch
             best_state_dict = copy.deepcopy(model.state_dict())
         else:
-            wait += 1
-            if wait >= patience:
+            patience_counter += 1
+            if patience_counter >= patience:
                 break
 
     model.load_state_dict(best_state_dict)
@@ -189,42 +122,80 @@ def train_record_w(model, device, trainset_loader, valset_loader, scaler, optimi
 
     logger.info(f"Early stopping at epoch: {epoch+1} Best at epoch {best_epoch+1}")
     train_log = "Train Loss: {:.5f} MAE: {:.5f} RMSE: {:.5f} MAPE: {:.5f}"
-    logger.info(train_log.format(train_loss_list[best_epoch], train_mae, train_rmse, train_mape))
+    logger.info(train_log.format(train_losses[best_epoch], train_mae, train_rmse, train_mape))
     
     val_log = "Val Loss: {:.5f} MAE: {:.5f} RMSE: {:.5f} MAPE: {:.5f}"
-    logger.info(val_log.format(val_loss_list[best_epoch], val_mae, val_rmse, val_mape))
-
-    if plot:
-        plt.plot(range(0, epoch + 1), train_loss_list, "-", label="Train Loss")
-        plt.plot(range(0, epoch + 1), val_loss_list, "-", label="Val Loss")
-        plt.title("Epoch-Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.show()
+    logger.info(val_log.format(val_losses[best_epoch], val_mae, val_rmse, val_mape))
 
     torch.save(best_state_dict, save_path)
     return model, w_list
 
+
 @torch.no_grad()
-def test_model(model, device, testset_loader, scaler, logger):
+def evaluate(model, device, dataloader, scaler, criterion):
     
     model = model.to(device)
     model.eval()
-    y_true, y_pred = predict(model, device, testset_loader, scaler)
+    losses = []
+    for inputs, targets in dataloader:
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+
+        outputs = model(inputs)
+        outputs = scaler.inverse_transform(outputs)
+        loss = criterion(outputs, targets)
+        losses.append(loss.item())
+
+    avg_loss = np.mean(losses)
+    return avg_loss
+
+
+@torch.no_grad()
+def predict(model, device, dataloader, scaler):
     
-    test_mae = []
-    test_mape = []
-    test_rmse = []
+    model = model.to(device)
+    model.eval()
+    true_labels = []
+    predictions = []
+
+    for inputs, labels in dataloader:
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+
+        preds = model(inputs)
+        preds = scaler.inverse_transform(preds)
+
+        preds = preds.cpu().numpy()
+        labels = labels.cpu().numpy()
+        predictions.append(preds)
+        true_labels.append(labels)
+
+    predictions = np.vstack(predictions).squeeze()
+    true_labels = np.vstack(true_labels).squeeze()
+
+    return true_labels, predictions
+
+
+@torch.no_grad()
+def test(model, device, testset_loader, scaler, logger):
     
-    out_steps = y_pred.shape[1]
+    model = model.to(device)
+    model.eval()
+    true_labels, predictions = predict(model, device, testset_loader, scaler)
+    
+    test_maes = []
+    test_mapes = []
+    test_rmses = []
+    
+    out_steps = predictions.shape[1]
     for i in range(out_steps):
-        rmse, mae, mape = RMSE_MAE_MAPE(y_true[:, i, :], y_pred[:, i, :])
+        rmse, mae, mape = RMSE_MAE_MAPE(true_labels[:, i, :], predictions[:, i, :])
         log = 'Horizon {:d}, Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}'
         logger.info(log.format(i + 1, mae, rmse, mape))
-        test_mae.append(mae)
-        test_rmse.append(rmse)
-        test_mape.append(mape)
+        test_maes.append(mae)
+        test_rmses.append(rmse)
+        test_mapes.append(mape)
 
     log = 'Average Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}'
-    logger.info(log.format(np.mean(test_mae), np.mean(test_rmse), np.mean(test_mape)))
+    logger.info(log.format(np.mean(test_maes), np.mean(test_rmses), np.mean(test_mapes)))
+    

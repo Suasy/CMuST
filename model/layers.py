@@ -67,7 +67,9 @@ class Autoencoder(nn.Module):
     
 class AttentionLayer(nn.Module):
     """
-    A custom implementation of a multi-head attention layer for neural networks.
+    implementation of a multi-head attention layer for neural networks.
+    
+    part ref https://github.com/XDZhelheim/STAEformer/blob/main/model/STAEformer.py#L6
     """
 
     def __init__(self, q_dim, k_dim, v_dim, atten_dim, num_heads=8, mask=False):
@@ -125,7 +127,7 @@ class AttentionLayer(nn.Module):
 
 class SelfAttentionLayer(nn.Module):
     """
-    A layer that implements self-attention followed by a feed-forward network, including normalization and optional dropout.
+    implements self-attention followed by a feed-forward network, including normalization and optional dropout.
     """
     
     def __init__(

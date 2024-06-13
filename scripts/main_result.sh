@@ -3,38 +3,48 @@
 dir="logs"
 mkdir -p $dir
 
-for dataset in NYC SIP CHI; do
+datasets=("NYC" "SIP" "CHI")
+num_nodes_arr=(206 108 220)  # num_nodes for each dataset
+tod_size_arr=(48 288 48)     # tod_size for each dataset
+
+for j in "${!datasets[@]}"; do
+    dataset=${datasets[$j]}
+    num_nodes=${num_nodes_arr[$j]}
+    tod_size=${tod_size_arr[$j]}
+        
     python -u main.py \
         --dataset $dataset \
-        --gpu 6 \
-        --num_nodes 206 \
-        --in_steps 12 \
-        --out_steps 12 \
-        --steps_per_day 48 \
+        --gpu $gpu \
+        --num_nodes $num_nodes \
+        --input_len 12 \
+        --output_len 12 \
+        --tod_size $tod_size \
         --train_size 0.7 \
         --val_size 0.1 \
         --lr 0.001 \
         --weight_decay 0.0003 \
-        --milestones 50 120 200 \
-        --lr_decay_rate 0.1 \
+        --steps 50 70 \
+        --gamma 0.1 \
         --batch_size 16 \
-        --max_epochs 500 \
+        --max_epochs 100 \
         --patience 30 \
         --threshold 0.000001 \
         --obser_dim 3 \
         --output_dim 1 \
-        --obser_embedding_dim 24 \
-        --tod_embedding_dim 24 \
-        --dow_embedding_dim 24 \
-        --timestamp_embedding_dim 12 \
-        --spatial_embedding_dim 12 \
-        --temporal_embedding_dim 60 \
+        --obser_embed_dim 24 \
+        --tod_embed_dim 24 \
+        --dow_embed_dim 24 \
+        --timestamp_embed_dim 12 \
+        --spatial_embed_dim 12 \
+        --temporal_embed_dim 60 \
         --prompt_dim 72 \
         --self_atten_dim 168 \
         --cross_atten_dim 24 \
         --feed_forward_dim 256 \
         --num_heads 4 \
-        --num_layers 1 \
         --dropout 0.1 \
-        >$dir/log_${dataset}.log
+        >$dir/log_${dataset}.log &
+
+    sleep 3
 done
+wait
